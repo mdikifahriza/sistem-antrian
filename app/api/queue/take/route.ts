@@ -6,46 +6,32 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Rate limiting storage (in production use Redis)
-const rateLimitMap = new Map<string, number>();
-
 export async function POST(request: NextRequest) {
   try {
     const { clinic } = await request.json();
     const today = new Date().toISOString().split('T')[0];
-    
-    // Simple rate limiting: 1 request per 5 minutes per IP
-    const ip = request.headers.get('x-forwarded-for') || 'unknown';
-    const lastRequest = rateLimitMap.get(ip);
-    const now = Date.now();
-    
-    if (lastRequest && now - lastRequest < 5 * 60 * 1000) {
-      return NextResponse.json(
-        { error: 'Harap tunggu 5 menit sebelum mengambil nomor lagi' },
-        { status: 429 }
-      );
-    }
-    
-    rateLimitMap.set(ip, now);
 
-    // Get max number for today
-    const { data: maxData } = await supabase
+    // Ambil nomor antrian terbesar hari ini
+    const { data: maxData, error: maxError } = await supabase
       .from('queues')
       .select('number')
       .eq('date', today)
       .order('number', { ascending: false })
       .limit(1);
 
-    const nextNumber = maxData && maxData.length > 0 ? maxData[0].number + 1 : 1;
+    if (maxError) throw maxError;
 
-    // Insert new queue
+    const nextNumber =
+      maxData && maxData.length > 0 ? maxData[0].number + 1 : 1;
+
+    // Insert antrian baru
     const { data, error } = await supabase
       .from('queues')
       .insert({
         date: today,
-        clinic: clinic,
+        clinic,
         number: nextNumber,
-        status: 'WAITING'
+        status: 'WAITING',
       })
       .select()
       .single();
@@ -55,6 +41,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data);
   } catch (error) {
     console.error('Take queue error:', error);
-    return NextResponse.json({ error: 'Failed to create queue' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to create queue' },
+      { status: 500 }
+    );
   }
 }
