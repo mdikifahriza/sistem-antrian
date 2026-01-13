@@ -10,254 +10,200 @@ type Queue = {
   counter?: number;
 };
 
-export default function Display() {
+export default function DisplayClient() {
   const [current, setCurrent] = useState<Queue | null>(null);
   const [next, setNext] = useState<Queue[]>([]);
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [isDark, setIsDark] = useState(false);
-  const [selectedClinic, setSelectedClinic] = useState<string>('ALL');
+  const [currentTime, setCurrentTime] = useState<string>('00:00:00');
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const previousNumber = useRef<number | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const CLINICS = ['ALL', 'Umum', 'Gigi', 'Anak', 'Mata', 'THT', 'Jantung'];
-
+  // PWA Service Worker
   useEffect(() => {
-    const timeInterval = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-    return () => clearInterval(timeInterval);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
   }, []);
 
-  const fetchQueues = async () => {
-    const res = await fetch('/api/queue/status');
-    const data = await res.json();
-    
-    // Play sound if number changed
-    if (data.current && data.current.number !== previousNumber.current) {
-      playNotificationSound();
-      previousNumber.current = data.current.number;
-    }
+  // Clock
+  useEffect(() => {
+    const update = () => {
+      const now = new Date();
+      setCurrentTime(
+        now.toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    };
+    update();
+    const t = setInterval(update, 1000);
+    return () => clearInterval(t);
+  }, []);
 
-    setCurrent(data.current);
-    
-    let waitingQueues = data.waiting || [];
-    if (selectedClinic !== 'ALL') {
-      waitingQueues = waitingQueues.filter((q: Queue) => q.clinic === selectedClinic);
+  // Fetch queues
+  const fetchQueues = async () => {
+    try {
+      const res = await fetch('/api/queue/status');
+      const data = await res.json();
+
+      if (data.current && data.current.number !== previousNumber.current) {
+        playBeep();
+        previousNumber.current = data.current.number;
+      }
+
+      setCurrent(data.current);
+      setNext((data.waiting || []).slice(0, 4));
+    } catch (error) {
+      console.error('Failed to fetch queues:', error);
     }
-    setNext(waitingQueues.slice(0, 3));
   };
 
   useEffect(() => {
     fetchQueues();
-    const interval = setInterval(fetchQueues, 3000);
-    return () => clearInterval(interval);
-  }, [selectedClinic]);
+    const i = setInterval(fetchQueues, 3000);
+    return () => clearInterval(i);
+  }, []);
 
-  const playNotificationSound = () => {
-    // Create simple beep sound using Web Audio API
-    if (typeof window !== 'undefined') {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      oscillator.frequency.value = 800;
-      oscillator.type = 'sine';
-      
-      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-      
-      oscillator.start(audioContext.currentTime);
-      oscillator.stop(audioContext.currentTime + 0.5);
+  // Beep sound
+  const playBeep = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 900;
+      gain.gain.value = 0.25;
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    } catch (error) {
+      console.error('Audio error:', error);
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('id-ID', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
+  // Fullscreen toggle
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+        setIsFullscreen(true);
+      } catch (err) {
+        console.error('Fullscreen error:', err);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    }
   };
 
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('id-ID', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
+  // Monitor fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
 
-  const bgClass = isDark 
-    ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
-    : 'bg-gradient-to-br from-blue-900 via-indigo-800 to-blue-700';
-
-  const cardBg = isDark ? 'bg-gray-800' : 'bg-white';
-  const textColor = isDark ? 'text-gray-100' : 'text-gray-700';
-  const primaryColor = isDark ? 'text-green-400' : 'text-green-600';
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   return (
-    <div className={`min-h-screen ${bgClass} p-8 transition-colors duration-500`}>
-      {/* Header */}
-      <div className="max-w-7xl mx-auto mb-6">
-        <div className="flex justify-between items-center">
-          <div className={`${isDark ? 'text-white' : 'text-white'}`}>
-            <h1 className="text-4xl font-bold">🏥 RUMAH SAKIT</h1>
-            <p className="text-xl mt-1">Sistem Antrian Digital</p>
-          </div>
-          <div className={`text-right ${isDark ? 'text-white' : 'text-white'}`}>
-            <div className="text-4xl font-bold font-mono">{formatTime(currentTime)}</div>
-            <div className="text-lg mt-1">{formatDate(currentTime)}</div>
-          </div>
-        </div>
-      </div>
+    <div className="h-[100dvh] w-screen bg-[#0b1220] text-white overflow-hidden relative">
+      <div className="h-full grid grid-rows-[80px_1fr]">
 
-      {/* Controls */}
-      <div className="max-w-7xl mx-auto mb-6 flex justify-between items-center">
-        <select
-          value={selectedClinic}
-          onChange={(e) => setSelectedClinic(e.target.value)}
-          className="px-6 py-3 rounded-lg font-semibold text-lg bg-white/20 text-white border-2 border-white/30 backdrop-blur"
-        >
-          {CLINICS.map(c => (
-            <option key={c} value={c} className="text-gray-900">
-              {c === 'ALL' ? 'Semua Poli' : `Poli ${c}`}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => setIsDark(!isDark)}
-          className="px-6 py-3 bg-white/20 text-white rounded-lg font-semibold backdrop-blur border-2 border-white/30 hover:bg-white/30 transition-colors"
-        >
-          {isDark ? '☀️ Light Mode' : '🌙 Dark Mode'}
-        </button>
-      </div>
+        {/* HEADER */}
+        <div className="flex items-center justify-between px-8 border-b border-white/10">
+          <div className="text-lg tracking-wide font-semibold">
+            SISTEM ANTRIAN
+          </div>
 
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Current Called */}
-        <div className={`${cardBg} rounded-3xl shadow-2xl p-12 transform transition-all duration-300`}>
-          <h2 className={`text-4xl font-bold mb-8 text-center ${textColor}`}>
-            🔔 SEDANG DIPANGGIL
-          </h2>
-          {current ? (
-            <div className="text-center animate-fade-in">
-              <div className={`text-[14rem] font-bold ${primaryColor} leading-none mb-6 animate-pulse-slow`}>
-                {current.number}
-              </div>
-              <div className={`text-5xl font-semibold ${textColor} mb-4`}>
-                Poli {current.clinic}
-              </div>
-              {current.counter && (
-                <div className="inline-block px-8 py-4 bg-indigo-600 text-white rounded-2xl text-3xl font-bold">
-                  Loket {current.counter}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className={`text-center ${isDark ? 'text-gray-600' : 'text-gray-400'} text-6xl py-16`}>
-              Menunggu Panggilan...
-            </div>
-          )}
+          <div className="text-2xl font-mono font-bold">
+            {currentTime}
+          </div>
+
+          {/* Fullscreen Toggle */}
+          <button
+            onClick={toggleFullscreen}
+            className="p-2 border border-white/30 rounded hover:bg-white/10 transition-colors"
+            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          >
+            {isFullscreen ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+              </svg>
+            )}
+          </button>
         </div>
 
-        {/* Next Queue */}
-        <div className={`${cardBg} rounded-3xl shadow-2xl p-12`}>
-          <h2 className={`text-4xl font-bold mb-10 text-center ${textColor}`}>
-            📋 ANTRIAN BERIKUTNYA
-          </h2>
-          <div className="grid grid-cols-3 gap-8">
-            {next.map((q, idx) => (
-              <div 
-                key={q.id} 
-                className={`${
-                  isDark ? 'bg-gray-700' : 'bg-gradient-to-br from-blue-50 to-indigo-100'
-                } rounded-3xl p-10 text-center transform hover:scale-105 transition-transform shadow-lg`}
-                style={{ animationDelay: `${idx * 0.1}s` }}
-              >
-                <div className={`text-8xl font-bold ${isDark ? 'text-blue-400' : 'text-blue-600'} mb-4`}>
-                  {q.number}
+        {/* MAIN */}
+        <div className="grid grid-cols-[2fr_1fr] h-full">
+
+          {/* CURRENT */}
+          <div className="flex flex-col justify-center items-center border-r border-white/10">
+
+            <div className="text-4xl font-bold tracking-widest mb-4">
+              SEDANG DIPANGGIL
+            </div>
+
+            {current ? (
+              <>
+                <div className="text-[12rem] leading-none font-extrabold">
+                  {current.number}
                 </div>
-                <div className={`text-2xl font-semibold ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
-                  {q.clinic}
+
+                <div className="text-4xl mt-4">
+                  POLI {current.clinic.toUpperCase()}
                 </div>
+
+                {current.counter && (
+                  <div className="text-4xl mt-2">
+                    LOKET {current.counter}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-3xl opacity-60">
+                MENUNGGU PANGGILAN
               </div>
-            ))}
-            {[...Array(3 - next.length)].map((_, i) => (
-              <div 
-                key={`empty-${i}`} 
-                className={`${
-                  isDark ? 'bg-gray-700/50' : 'bg-gray-100'
-                } rounded-3xl p-10 text-center`}
-              >
-                <div className={`text-8xl font-bold ${isDark ? 'text-gray-600' : 'text-gray-300'}`}>
+            )}
+          </div>
+
+          {/* NEXT */}
+          <div className="p-6 grid grid-rows-[auto_1fr]">
+            <div className="text-2xl font-bold tracking-widest text-center mb-4">
+              ANTRIAN BERIKUTNYA
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {next.map(q => (
+                <div
+                  key={q.id}
+                  className="border border-white/20 rounded-lg flex flex-col items-center justify-center"
+                >
+                  <div className="text-5xl font-bold">{q.number}</div>
+                  <div className="text-sm mt-1">POLI {q.clinic.toUpperCase()}</div>
+                </div>
+              ))}
+
+              {[...Array(4 - next.length)].map((_, i) => (
+                <div
+                  key={i}
+                  className="border border-white/10 rounded-lg flex items-center justify-center opacity-30"
+                >
                   -
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Footer Info */}
-        <div className={`${cardBg} rounded-2xl shadow-xl p-8`}>
-          <div className="grid grid-cols-3 gap-6 text-center">
-            <div>
-              <div className={`text-3xl font-bold ${primaryColor}`}>
-                {current ? current.number : 0}
-              </div>
-              <div className={`text-lg ${textColor} mt-2`}>Sedang Dilayani</div>
-            </div>
-            <div>
-              <div className={`text-3xl font-bold ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
-                {next.length}
-              </div>
-              <div className={`text-lg ${textColor} mt-2`}>Antrian Berikutnya</div>
-            </div>
-            <div>
-              <div className={`text-3xl font-bold ${isDark ? 'text-purple-400' : 'text-purple-600'}`}>
-                {selectedClinic === 'ALL' ? 'Semua' : selectedClinic}
-              </div>
-              <div className={`text-lg ${textColor} mt-2`}>Poli Aktif</div>
+              ))}
             </div>
           </div>
-        </div>
 
-        {/* Promo Banner */}
-        <div className="bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500 rounded-2xl shadow-xl p-6 text-center animate-pulse-slow">
-          <p className="text-white text-2xl font-bold">
-            💡 Harap perhatikan nomor antrian Anda di layar
-          </p>
         </div>
       </div>
-
-      <style jsx>{`
-        @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: scale(0.9);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
-        }
-        @keyframes pulse-slow {
-          0%, 100% {
-            opacity: 1;
-          }
-          50% {
-            opacity: 0.8;
-          }
-        }
-        .animate-fade-in {
-          animation: fade-in 0.5s ease-out;
-        }
-        .animate-pulse-slow {
-          animation: pulse-slow 2s ease-in-out infinite;
-        }
-      `}</style>
     </div>
   );
 }
